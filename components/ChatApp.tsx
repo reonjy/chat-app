@@ -821,7 +821,6 @@ export default function ChatApp() {
           </div>
 
           <div className="flex items-center gap-1">
-            {/* New chat */}
             <button
               onClick={startNewChat}
               className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-all md:hidden"
@@ -841,7 +840,6 @@ export default function ChatApp() {
                 <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
               </svg>
             </button>
-          )}
 
           {/* Settings */}
           <button
