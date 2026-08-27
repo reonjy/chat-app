@@ -51,6 +51,65 @@ const readAsText = (file: File): Promise<string> =>
     r.readAsText(file);
   });
 
+/** Resize & compress images so the payload stays within API limits */
+const compressImage = (
+  dataUrl: string,
+  maxDim = 2048,
+  quality = 0.85
+): Promise<string> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.src = dataUrl;
+  });
+
+/** Extract text from a PDF using pdfjs-dist */
+const extractPdfText = async (file: File): Promise<string> => {
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.js");
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) })
+      .promise;
+
+    const pages: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = textContent.items
+        .map((item: any) => ("str" in item ? item.str : ""))
+        .join("");
+      if (text.trim()) pages.push(`[Page ${i}]\n${text}`);
+    }
+
+    return pages.length
+      ? pages.join("\n\n")
+      : "[PDF contained no extractable text — it may be a scanned/image-based PDF]";
+  } catch (err) {
+    console.error("PDF extraction failed:", err);
+    return `[Failed to extract text from PDF: ${file.name}]`;
+  }
+};
+
 const fmtSize = (b: number) =>
   b < 1024
     ? `${b} B`
@@ -85,9 +144,14 @@ function buildApiMessages(msgs: Message[]) {
       parts.push({ type: "image_url", image_url: { url: img.dataUrl } });
     }
 
-    // Append the user's text
+    // Append the user's text (or a default prompt when only files are attached)
     if (msg.content) {
       parts.push({ type: "text", text: msg.content });
+    } else if (parts.length > 0) {
+      parts.push({
+        type: "text",
+        text: "Please analyze the attached file(s) and describe what you see.",
+      });
     }
 
     // Simplify to a plain string if no multimodal content
@@ -277,8 +341,17 @@ export default function ChatApp() {
         size: file.size,
       };
       if (file.type.startsWith("image/")) {
-        att.dataUrl = await readAsDataUrl(file);
+        // Read and compress image to avoid exceeding API payload limits
+        const rawDataUrl = await readAsDataUrl(file);
+        att.dataUrl = await compressImage(rawDataUrl);
+      } else if (
+        file.type === "application/pdf" ||
+        file.name.toLowerCase().endsWith(".pdf")
+      ) {
+        // Extract actual text from PDF using pdfjs-dist
+        att.textContent = await extractPdfText(file);
       } else {
+        // Plain text / code files
         try {
           att.textContent = await readAsText(file);
         } catch {
