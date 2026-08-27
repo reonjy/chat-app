@@ -558,11 +558,6 @@ export default function ChatApp() {
     if (!text && attachments.length === 0) return;
     if (isLoading) return;
 
-    if (!settings.baseUrl || !settings.apiKey) {
-      setShowSettings(true);
-      return;
-    }
-
     const userMsg: Message = {
       id: uid(),
       role: "user",

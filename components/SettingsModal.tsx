@@ -72,6 +72,9 @@ export default function SettingsModal({
 
         {/* Fields */}
         <div className="space-y-4">
+          <p className="text-xs text-sky-500 bg-sky-50 p-2 rounded-lg border border-sky-100">
+            If BASE_URL, API_KEY, and MODEL are set via server environment variables, you can leave these blank to use the server defaults.
+          </p>
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-1.5">
               Base URL

@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "edge";
 
@@ -6,32 +6,31 @@ export async function POST(req: NextRequest) {
   try {
     const { messages, baseUrl, apiKey, model } = await req.json();
 
-    if (!baseUrl || !apiKey) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Base URL and API Key are required. Open Settings (⚙) to configure.",
-        }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+    const finalBaseUrl = baseUrl || process.env.BASE_URL;
+    const finalApiKey = apiKey || process.env.API_KEY;
+    const finalModel = model || process.env.MODEL || "claude-opus-5-thinking";
+
+    if (!finalApiKey || !finalBaseUrl) {
+      return NextResponse.json(
+        { error: "API Key and Base URL are required." },
+        { status: 400 }
       );
     }
 
-    // Normalize the base URL and build the completions endpoint
-    const base = baseUrl.replace(/\/+$/, "");
-    const url = base.endsWith("/v1/chat/completions")
-      ? base
-      : base.endsWith("/v1")
-        ? `${base}/chat/completions`
-        : `${base}/v1/chat/completions`;
+    // Normalize base URL
+    let apiUrl = finalBaseUrl.trim();
+    if (!apiUrl.endsWith("/v1/chat/completions") && !apiUrl.endsWith("/chat/completions")) {
+      apiUrl = apiUrl.replace(/\/+$/, "") + "/v1/chat/completions";
+    }
 
-    const response = await fetch(url, {
+    const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${finalApiKey}`,
       },
       body: JSON.stringify({
-        model,
+        model: finalModel.trim(),
         messages,
         stream: true,
       }),
