@@ -176,9 +176,9 @@ function ThinkingBlock({
 }) {
   const [isOpen, setIsOpen] = useState(isStreaming);
 
-  // Auto-open while streaming, allow manual toggle after
+  // Auto-open while streaming, auto-close when done
   useEffect(() => {
-    if (isStreaming) setIsOpen(true);
+    setIsOpen(isStreaming);
   }, [isStreaming]);
 
   return (
@@ -230,6 +230,30 @@ function ThinkingBlock({
         </div>
       )}
     </div>
+  );
+}
+
+function RetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <button
+      onClick={onRetry}
+      className="p-1 text-gray-400 hover:text-gray-600 rounded-md hover:bg-white/60 transition-all"
+      title="Retry response"
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M21 2v6h-6" />
+        <path d="M3 12a9 9 0 1 0 2.62-6.38L21 8" />
+      </svg>
+    </button>
   );
 }
 
@@ -384,6 +408,99 @@ export default function ChatApp() {
     [processFiles]
   );
 
+  /* ---- stream reading ---- */
+  const runChatApi = async (chatHistory: Message[], assistantId: string) => {
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: buildApiMessages(chatHistory),
+          baseUrl: settings.baseUrl,
+          apiKey: settings.apiKey,
+          model: settings.model,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: `⚠️ ${err.error || "Something went wrong."}` }
+              : m
+          )
+        );
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No readable stream");
+
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let accumulatedThinking = "";
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            const choice = parsed.choices?.[0];
+            const delta = choice?.delta;
+            if (!delta) continue;
+
+            const thinkingDelta =
+              delta.reasoning_content ?? delta.thinking ?? null;
+            if (thinkingDelta) {
+              accumulatedThinking += thinkingDelta;
+              const snapT = accumulatedThinking;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, thinking: snapT } : m
+                )
+              );
+            }
+
+            const contentDelta = delta.content;
+            if (contentDelta) {
+              accumulated += contentDelta;
+              const snap = accumulated;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: snap } : m
+                )
+              );
+            }
+          } catch {
+            /* skip malformed chunks */
+          }
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Connection failed.";
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: `⚠️ ${msg}` } : m
+        )
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   /* ---- send message ---- */
   const handleSend = async () => {
     const text = input.trim();
@@ -414,101 +531,32 @@ export default function ChatApp() {
     setAttachments([]);
     setIsLoading(true);
 
-    // Reset textarea height
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+    
+    await runChatApi(updated, assistantMsg.id);
+  };
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: buildApiMessages(updated),
-          baseUrl: settings.baseUrl,
-          apiKey: settings.apiKey,
-          model: settings.model,
-        }),
-      });
+  const handleRetry = async (msgId: string) => {
+    if (isLoading) return;
+    const msgIndex = messages.findIndex((m) => m.id === msgId);
+    if (msgIndex === -1) return;
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsg.id
-              ? { ...m, content: `⚠️ ${err.error || "Something went wrong."}` }
-              : m
-          )
-        );
-        return;
-      }
-
-      /* ---- stream reading ---- */
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No readable stream");
-
-      const decoder = new TextDecoder();
-      let accumulated = "";
-      let accumulatedThinking = "";
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            const choice = parsed.choices?.[0];
-            const delta = choice?.delta;
-            if (!delta) continue;
-
-            // Capture thinking / reasoning tokens
-            const thinkingDelta =
-              delta.reasoning_content ?? delta.thinking ?? null;
-            if (thinkingDelta) {
-              accumulatedThinking += thinkingDelta;
-              const snapT = accumulatedThinking;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMsg.id ? { ...m, thinking: snapT } : m
-                )
-              );
-            }
-
-            // Capture regular content tokens
-            const contentDelta = delta.content;
-            if (contentDelta) {
-              accumulated += contentDelta;
-              const snap = accumulated;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMsg.id ? { ...m, content: snap } : m
-                )
-              );
-            }
-          } catch {
-            /* skip malformed chunks */
-          }
-        }
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Connection failed.";
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id ? { ...m, content: `⚠️ ${msg}` } : m
-        )
-      );
-    } finally {
-      setIsLoading(false);
+    let lastUserIndex = msgIndex - 1;
+    while (lastUserIndex >= 0 && messages[lastUserIndex].role !== "user") {
+      lastUserIndex--;
     }
+    if (lastUserIndex === -1) return;
+
+    const updated = messages.slice(0, lastUserIndex + 1);
+    const assistantMsg: Message = {
+      id: uid(),
+      role: "assistant",
+      content: "",
+    };
+
+    setMessages([...updated, assistantMsg]);
+    setIsLoading(true);
+    await runChatApi(updated, assistantMsg.id);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -631,7 +679,7 @@ export default function ChatApp() {
 
       {/* ======== MESSAGES ======== */}
       <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4">
-        <div className="max-w-3xl mx-auto space-y-4">
+        <div className="w-full mx-auto space-y-4">
           {/* Empty state */}
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full min-h-[50vh] text-center space-y-3 select-none">
@@ -670,7 +718,7 @@ export default function ChatApp() {
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`max-w-[88%] sm:max-w-[75%] px-4 py-3 shadow-sm ${
+                className={`max-w-[95%] md:max-w-[90%] px-4 py-3 shadow-sm ${
                   msg.role === "user"
                     ? "bg-gradient-to-br from-rose-100 to-rose-50 rounded-2xl rounded-br-lg"
                     : "bg-gradient-to-br from-sky-50 to-sky-100/60 rounded-2xl rounded-bl-lg"
@@ -729,9 +777,10 @@ export default function ChatApp() {
                           </ReactMarkdown>
                         </div>
                       )}
-                      {/* Copy button */}
+                      {/* Actions */}
                       {msg.content && !isLoading && (
-                        <div className="flex justify-end mt-2">
+                        <div className="flex justify-end gap-1 mt-2">
+                          <RetryButton onRetry={() => handleRetry(msg.id)} />
                           <CopyButton text={msg.content} />
                         </div>
                       )}
@@ -768,7 +817,7 @@ export default function ChatApp() {
       {/* ======== ATTACHMENT BAR ======== */}
       {attachments.length > 0 && (
         <div className="px-3 sm:px-6 py-2 border-t border-gray-100/80 bg-white/50 flex-shrink-0">
-          <div className="max-w-3xl mx-auto flex flex-wrap gap-2">
+          <div className="w-full mx-auto flex flex-wrap gap-2">
             {attachments.map((att, i) => (
               <div
                 key={i}
@@ -823,7 +872,7 @@ export default function ChatApp() {
 
       {/* ======== INPUT BAR ======== */}
       <div className="border-t border-gray-100/80 bg-white/70 backdrop-blur-lg px-3 sm:px-6 py-3 flex-shrink-0">
-        <div className="max-w-3xl mx-auto flex items-end gap-2">
+        <div className="w-full mx-auto flex items-end gap-2">
           {/* Attach button */}
           <button
             onClick={() => fileRef.current?.click()}
