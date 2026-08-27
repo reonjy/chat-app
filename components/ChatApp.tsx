@@ -21,6 +21,7 @@ interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  thinking?: string;
   attachments?: Attachment[];
 }
 
@@ -96,6 +97,127 @@ function buildApiMessages(msgs: Message[]) {
 
     return { role: "user" as const, content: parts };
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Sub-components                                                     */
+/* ------------------------------------------------------------------ */
+
+function ThinkingBlock({
+  thinking,
+  isStreaming,
+}: {
+  thinking: string;
+  isStreaming: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(isStreaming);
+
+  // Auto-open while streaming, allow manual toggle after
+  useEffect(() => {
+    if (isStreaming) setIsOpen(true);
+  }, [isStreaming]);
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setIsOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors group"
+      >
+        {/* Brain icon */}
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={isStreaming ? "animate-pulse text-violet-400" : "text-gray-400 group-hover:text-gray-500"}
+        >
+          <path d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-1 7.87V16a3 3 0 0 0 3 3h4a3 3 0 0 0 3-3v-1.13A4 4 0 0 0 16 7V6a4 4 0 0 0-4-4z" />
+          <path d="M10 10h.01" />
+          <path d="M14 10h.01" />
+          <path d="M10 14a3.5 3.5 0 0 0 4 0" />
+        </svg>
+        <span>
+          {isStreaming ? "Thinking…" : "Thinking"}
+        </span>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {isOpen && (
+        <div className="mt-1.5 pl-3 border-l-2 border-violet-200/60 text-xs text-gray-500 leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto">
+          {thinking}
+          {isStreaming && (
+            <span className="inline-block w-1.5 h-3.5 bg-violet-300 rounded-sm ml-0.5 animate-pulse" />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* fallback: ignore */
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1 text-gray-400 hover:text-gray-600 rounded-md hover:bg-white/60 transition-all"
+      title="Copy response"
+    >
+      {copied ? (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -252,6 +374,7 @@ export default function ChatApp() {
 
       const decoder = new TextDecoder();
       let accumulated = "";
+      let accumulatedThinking = "";
       let buffer = "";
 
       while (true) {
@@ -270,10 +393,28 @@ export default function ChatApp() {
 
           try {
             const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content;
-            if (delta) {
-              accumulated += delta;
-              const snap = accumulated; // capture for closure
+            const choice = parsed.choices?.[0];
+            const delta = choice?.delta;
+            if (!delta) continue;
+
+            // Capture thinking / reasoning tokens
+            const thinkingDelta =
+              delta.reasoning_content ?? delta.thinking ?? null;
+            if (thinkingDelta) {
+              accumulatedThinking += thinkingDelta;
+              const snapT = accumulatedThinking;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsg.id ? { ...m, thinking: snapT } : m
+                )
+              );
+            }
+
+            // Capture regular content tokens
+            const contentDelta = delta.content;
+            if (contentDelta) {
+              accumulated += contentDelta;
+              const snap = accumulated;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsg.id ? { ...m, content: snap } : m
@@ -501,11 +642,26 @@ export default function ChatApp() {
 
                 {/* Content */}
                 {msg.role === "assistant" ? (
-                  msg.content ? (
-                    <div className="chat-markdown text-sm text-gray-800 leading-relaxed">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
+                  msg.content || msg.thinking ? (
+                    <div>
+                      {/* Thinking block */}
+                      {msg.thinking && (
+                        <ThinkingBlock thinking={msg.thinking} isStreaming={isLoading && !msg.content && !!msg.thinking} />
+                      )}
+                      {/* Response */}
+                      {msg.content && (
+                        <div className="chat-markdown text-sm text-gray-800 leading-relaxed">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        </div>
+                      )}
+                      {/* Copy button */}
+                      {msg.content && !isLoading && (
+                        <div className="flex justify-end mt-2">
+                          <CopyButton text={msg.content} />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center gap-1.5 py-1">
