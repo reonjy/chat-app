@@ -257,6 +257,57 @@ function RetryButton({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+function CodeCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* fallback: ignore */
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 bg-gray-100/80 hover:bg-white rounded-md transition-all shadow-sm z-10"
+      title="Copy code"
+    >
+      {copied ? (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -718,7 +769,7 @@ export default function ChatApp() {
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`max-w-[95%] md:max-w-[90%] px-4 py-3 shadow-sm ${
+                className={`max-w-full px-4 py-3 shadow-sm overflow-x-hidden ${
                   msg.role === "user"
                     ? "bg-gradient-to-br from-rose-100 to-rose-50 rounded-2xl rounded-br-lg"
                     : "bg-gradient-to-br from-sky-50 to-sky-100/60 rounded-2xl rounded-bl-lg"
@@ -772,7 +823,26 @@ export default function ChatApp() {
                       {/* Response */}
                       {msg.content && (
                         <div className="chat-markdown text-sm text-gray-800 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code(props) {
+                                const { children, className, node, ...rest } = props;
+                                const match = /language-(\w+)/.exec(className || "");
+                                if (match) {
+                                  return (
+                                    <>
+                                      <CodeCopyButton text={String(children).replace(/\n$/, "")} />
+                                      <code className={className} {...rest}>
+                                        {children}
+                                      </code>
+                                    </>
+                                  );
+                                }
+                                return <code className={className} {...rest}>{children}</code>;
+                              },
+                            }}
+                          >
                             {msg.content}
                           </ReactMarkdown>
                         </div>
