@@ -1143,6 +1143,8 @@ export default function ChatApp() {
         </div>
       </div>
 
+      </div>
+
       {/* ======== SETTINGS MODAL ======== */}
       <SettingsModal
         isOpen={showSettings}
