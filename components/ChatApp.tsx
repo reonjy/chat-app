@@ -253,9 +253,16 @@ function SvgRenderer({ content }: { content: string }) {
   const [url, setUrl] = useState<string>("");
   
   useEffect(() => {
-    const blob = new Blob([content], { type: "image/svg+xml" });
+    let safeContent = content;
+    // LLMs often forget the xmlns attribute, which is REQUIRED for SVGs rendered in img tags
+    if (!safeContent.includes("xmlns=")) {
+      safeContent = safeContent.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    
+    const blob = new Blob([safeContent], { type: "image/svg+xml" });
     const blobUrl = URL.createObjectURL(blob);
     setUrl(blobUrl);
+    
     return () => URL.revokeObjectURL(blobUrl);
   }, [content]);
 
@@ -1031,7 +1038,7 @@ export default function ChatApp() {
                               }
                             }}
                           >
-                            {msg.content}
+                            {msg.content.replace(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi, "![image]($1)")}
                           </ReactMarkdown>
                         </div>
                       )}
