@@ -249,6 +249,24 @@ function RetryButton({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+function SvgRenderer({ content }: { content: string }) {
+  const [url, setUrl] = useState<string>("");
+  
+  useEffect(() => {
+    const blob = new Blob([content], { type: "image/svg+xml" });
+    const blobUrl = URL.createObjectURL(blob);
+    setUrl(blobUrl);
+    return () => URL.revokeObjectURL(blobUrl);
+  }, [content]);
+
+  if (!url) return null;
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm flex items-center justify-center min-h-[150px] overflow-auto my-3 relative group">
+      <img src={url} alt="Generated SVG" className="max-w-full" />
+    </div>
+  );
+}
+
 function CodeCopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -966,9 +984,26 @@ export default function ChatApp() {
                                 const { children, className, node, ...rest } = props;
                                 const match = /language-(\w+)/.exec(className || "");
                                 if (match) {
+                                  const language = match[1];
+                                  const content = String(children).replace(/\n$/, "");
+                                  
+                                  if (language === "svg" || language === "xml" && content.includes("<svg")) {
+                                    return (
+                                      <div>
+                                        <SvgRenderer content={content} />
+                                        <div className="relative group">
+                                          <CodeCopyButton text={content} />
+                                          <code className={className} {...rest}>
+                                            {children}
+                                          </code>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
                                   return (
                                     <>
-                                      <CodeCopyButton text={String(children).replace(/\n$/, "")} />
+                                      <CodeCopyButton text={content} />
                                       <code className={className} {...rest}>
                                         {children}
                                       </code>
@@ -983,6 +1018,15 @@ export default function ChatApp() {
                                   <div className="overflow-x-auto overflow-y-auto max-h-[60vh] max-w-full my-3 border border-gray-200 rounded-lg shadow-sm">
                                     <table className="w-full border-collapse" {...rest} />
                                   </div>
+                                );
+                              },
+                              img(props) {
+                                return (
+                                  <img 
+                                    {...props} 
+                                    className="max-w-full rounded-xl shadow-sm my-3 object-contain max-h-[600px] bg-white border border-gray-100" 
+                                    loading="lazy"
+                                  />
                                 );
                               }
                             }}
